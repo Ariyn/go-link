@@ -52,11 +52,20 @@ jobs:
     needs: build-release
     runs-on: ubuntu-latest
     steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      - name: Package extension
+        run: |
+          zip -r dist/go-link-extension.zip extension \
+            -x "**/.DS_Store" \
+            -x "**/Thumbs.db"
 
       - name: Generate checksums
         run: |
@@ -68,4 +77,5 @@ jobs:
         with:
           files: |
             dist/personal-go-link_*
+            dist/go-link-extension.zip
             dist/checksums.txt

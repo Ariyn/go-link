@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>go/link Options</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      }
+
+      body {
+        margin: 0;
+        padding: 32px;
+        background: #f6f1e7;
+        color: #1d1a16;
+      }
+
+      .card {
+        max-width: 520px;
+        padding: 24px;
+        background: #ffffff;
+        border-radius: 16px;
+        box-shadow: 0 12px 30px rgba(38, 30, 20, 0.12);
+      }
+
+      h1 {
+        margin: 0 0 16px;
+        font-size: 22px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+      }
+
+      input {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid #c9bfae;
+        font-size: 14px;
+      }
+
+      button {
+        margin-top: 12px;
+        padding: 10px 18px;
+        border: none;
+        border-radius: 999px;
+        background: #b3541e;
+        color: #fff;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      #status {
+        margin-top: 10px;
+        min-height: 20px;
+        color: #2f6a1d;
+        font-size: 13px;
+      }
+
+      .hint {
+        margin-top: 12px;
+        font-size: 12px;
+        color: #5a4e3f;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>go/link Settings</h1>
+      <label for="baseUrl">Base URL</label>
+      <input id="baseUrl" type="text" placeholder="https://go.example.com/" />
+      <button id="save">Save</button>
+      <div id="status"></div>
+      <div class="hint">Example: https://go.example.com/ or https://example.com/go/</div>
+    </div>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

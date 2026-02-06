@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "go/link Omnibox",
+  "version": "0.1.0",
+  "description": "Omnibox shortcut for go/link.",
+  "omnibox": {
+    "keyword": "go"
+  },
+  "permissions": ["omnibox", "storage"],
+  "optional_permissions": ["tabs"],
+  "background": {
+    "service_worker": "sw/background.js",
+    "type": "module"
+  },
+  "options_page": "options/options.html"
+}

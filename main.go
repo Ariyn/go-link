@@ -15,6 +15,7 @@ import (
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/hook"
+	"github.com/spf13/cobra"
 )
 
 var slugPattern = regexp.MustCompile("^[a-z0-9_-]+$")
@@ -100,10 +101,36 @@ func hasFlag(args []string, name string) bool {
 	return false
 }
 
+func addCustomCLIHelp(app *pocketbase.PocketBase) {
+	var serveCmd *cobra.Command
+	for _, cmd := range app.RootCmd.Commands() {
+		if cmd.Name() == "serve" {
+			serveCmd = cmd
+			break
+		}
+	}
+
+	if serveCmd != nil {
+		customNote := "Custom behavior:\n  - If --http is not set, defaults to 0.0.0.0:80.\n"
+		serveCmd.Long = strings.TrimSpace(serveCmd.Long)
+		if serveCmd.Long != "" {
+			serveCmd.Long = serveCmd.Long + "\n\n" + customNote
+		} else {
+			serveCmd.Long = customNote
+		}
+	}
+
+	rootTemplate := app.RootCmd.HelpTemplate()
+	if !strings.Contains(rootTemplate, "Custom commands") {
+		app.RootCmd.SetHelpTemplate(rootTemplate + "\nCustom commands:\n  serve\n    - Defaults to 0.0.0.0:80 when --http is omitted.\n")
+	}
+}
+
 func main() {
 	app := pocketbase.New()
 
 	os.Args = ensureHttp80Default(os.Args)
+	addCustomCLIHelp(app)
 
 	app.OnBootstrap().Bind(&hook.Handler[*core.BootstrapEvent]{
 		Func: func(e *core.BootstrapEvent) error {

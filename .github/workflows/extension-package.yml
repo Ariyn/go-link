@@ -1,0 +1,30 @@
+name: Package Extension
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "ext-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  package-extension:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Create extension package
+        run: |
+          mkdir -p dist
+          zip -r dist/go-link-extension.zip extension \
+            -x "**/.DS_Store" \
+            -x "**/Thumbs.db"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-link-extension
+          path: dist/go-link-extension.zip
