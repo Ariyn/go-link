@@ -18,10 +18,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var slugPattern = regexp.MustCompile("^[a-z0-9_-]+$")
+var slugPattern = regexp.MustCompile("^[a-z0-9_/-]+$")
 
 func normalizeSlug(raw string) (string, bool) {
 	slug := strings.ToLower(strings.TrimSpace(raw))
+	slug = strings.Trim(slug, "/")
 	if slug == "" || !slugPattern.MatchString(slug) {
 		return "", false
 	}
@@ -158,7 +159,7 @@ func main() {
 
 	app.OnServe().Bind(&hook.Handler[*core.ServeEvent]{
 		Func: func(e *core.ServeEvent) error {
-			e.Router.GET("/{slug}", func(re *core.RequestEvent) error {
+			e.Router.GET("/{slug...}", func(re *core.RequestEvent) error {
 				slug, ok := normalizeSlug(re.Request.PathValue("slug"))
 				if !ok {
 					return re.NoContent(http.StatusNotFound)

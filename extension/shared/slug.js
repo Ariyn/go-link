@@ -1,4 +1,4 @@
-const SLUG_PATTERN = /[^a-z0-9-_]/g;
+const SLUG_PATTERN = /[^a-z0-9_/-]/g;
 
 export function normalizeSlug(value) {
   if (!value) {
@@ -8,5 +8,6 @@ export function normalizeSlug(value) {
   if (!trimmed) {
     return "";
   }
-  return trimmed.replace(SLUG_PATTERN, "");
+  const withoutSlashes = trimmed.replace(/^\/+|\/+$/g, "");
+  return withoutSlashes.replace(SLUG_PATTERN, "");
 }
