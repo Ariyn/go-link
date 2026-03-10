@@ -18,7 +18,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var slugPattern = regexp.MustCompile("^[a-z0-9_/-]+$")
+var slugPattern = regexp.MustCompile("^[a-z0-9_/{}-]+$")
+var paramPattern = regexp.MustCompile(`\{([^}]+)\}`)
 
 func normalizeSlug(raw string) (string, bool) {
 	slug := strings.ToLower(strings.TrimSpace(raw))
@@ -41,6 +42,38 @@ func normalizeTargetURL(raw string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// matchParameterizedSlug checks if the incoming slug matches a parameterized
+// slug pattern (e.g., "jira/{id}") and returns extracted parameter values.
+func matchParameterizedSlug(pattern, slug string) (map[string]string, bool) {
+	patternParts := strings.Split(pattern, "/")
+	slugParts := strings.Split(slug, "/")
+
+	if len(patternParts) != len(slugParts) {
+		return nil, false
+	}
+
+	params := make(map[string]string)
+	for i, part := range patternParts {
+		if paramPattern.MatchString(part) {
+			name := paramPattern.FindStringSubmatch(part)[1]
+			params[name] = slugParts[i]
+		} else if part != slugParts[i] {
+			return nil, false
+		}
+	}
+
+	return params, true
+}
+
+// substituteParams replaces {name} placeholders in a URL with actual values.
+func substituteParams(targetURL string, params map[string]string) string {
+	result := targetURL
+	for name, value := range params {
+		result = strings.ReplaceAll(result, "{"+name+"}", value)
+	}
+	return result
 }
 
 func ensureLinksCollection(app core.App) error {
@@ -170,14 +203,42 @@ func main() {
 					"slug = {:slug} && enabled = true",
 					dbx.Params{"slug": slug},
 				)
-				if err != nil {
-					return re.NoContent(http.StatusNotFound)
-				}
 
-				targetRaw := record.GetString("target_url")
-				targetURL, ok := normalizeTargetURL(targetRaw)
-				if !ok {
-					return re.NoContent(http.StatusNotFound)
+				var targetURL string
+				if err != nil {
+					// No exact match — try parameterized slugs
+					records, findErr := app.FindAllRecords(
+						"links",
+						dbx.NewExp("slug LIKE '%{%}%' AND enabled = {:enabled}", dbx.Params{"enabled": true}),
+					)
+					if findErr != nil || len(records) == 0 {
+						return re.NoContent(http.StatusNotFound)
+					}
+
+					var matched bool
+					for _, r := range records {
+						params, ok := matchParameterizedSlug(r.GetString("slug"), slug)
+						if ok {
+							record = r
+							raw := substituteParams(r.GetString("target_url"), params)
+							targetURL, ok = normalizeTargetURL(raw)
+							if !ok {
+								return re.NoContent(http.StatusNotFound)
+							}
+							matched = true
+							break
+						}
+					}
+					if !matched {
+						return re.NoContent(http.StatusNotFound)
+					}
+				} else {
+					raw := record.GetString("target_url")
+					var valid bool
+					targetURL, valid = normalizeTargetURL(raw)
+					if !valid {
+						return re.NoContent(http.StatusNotFound)
+					}
 				}
 
 				re.Response.Header().Set("Cache-Control", "no-store")
