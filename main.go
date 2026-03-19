@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -11,10 +12,12 @@ import (
 	"strings"
 	"time"
 
+	validation "github.com/go-ozzo/ozzo-validation/v4"
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/hook"
+	"github.com/pocketbase/pocketbase/tools/types"
 	"github.com/spf13/cobra"
 )
 
@@ -77,37 +80,176 @@ func substituteParams(targetURL string, params map[string]string) string {
 }
 
 func ensureLinksCollection(app core.App) error {
-	_, err := app.FindCollectionByNameOrId("links")
-	if err == nil {
+	collection, err := app.FindCollectionByNameOrId("links")
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+
+		collection = core.NewCollection(core.CollectionTypeBase, "links")
+		collection.Fields.Add(
+			&core.TextField{
+				Name:     "slug",
+				Required: true,
+			},
+			&core.URLField{
+				Name:     "target_url",
+				Required: true,
+			},
+			&core.BoolField{
+				Name: "enabled",
+			},
+			&core.NumberField{
+				Name: "hits",
+			},
+			&core.DateField{
+				Name: "last_hit_at",
+			},
+			&core.DateField{
+				Name: "expires_at",
+			},
+			&core.NumberField{
+				Name: "ttl_seconds",
+			},
+		)
+		collection.AddIndex("idx_links_slug", false, "`slug`", "")
+		collection.AddIndex("idx_links_slug_enabled", false, "`slug`, `enabled`", "")
+
+		return app.Save(collection)
+	}
+
+	changed := false
+
+	if collection.Fields.GetByName("expires_at") == nil {
+		collection.Fields.Add(&core.DateField{Name: "expires_at"})
+		changed = true
+	}
+
+	if collection.Fields.GetByName("ttl_seconds") == nil {
+		collection.Fields.Add(&core.NumberField{Name: "ttl_seconds"})
+		changed = true
+	}
+
+	if idx := collection.GetIndex("idx_links_slug"); idx == "" || strings.Contains(strings.ToUpper(idx), "UNIQUE") {
+		collection.AddIndex("idx_links_slug", false, "`slug`", "")
+		changed = true
+	}
+
+	if collection.GetIndex("idx_links_slug_enabled") == "" {
+		collection.AddIndex("idx_links_slug_enabled", false, "`slug`, `enabled`", "")
+		changed = true
+	}
+
+	if !changed {
 		return nil
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
+
+	return app.Save(collection)
+}
+
+func hasRawValue(v any) bool {
+	if v == nil {
+		return false
+	}
+
+	return strings.TrimSpace(fmt.Sprint(v)) != ""
+}
+
+func isExpiredRecord(record *core.Record, now types.DateTime) bool {
+	expiresAt := record.GetDateTime("expires_at")
+	if expiresAt.IsZero() {
+		return false
+	}
+
+	return !expiresAt.After(now)
+}
+
+func isActiveRecord(record *core.Record, now types.DateTime) bool {
+	if !record.GetBool("enabled") {
+		return false
+	}
+
+	return !isExpiredRecord(record, now)
+}
+
+func isRecordNewer(candidate, selected *core.Record) bool {
+	if selected == nil {
+		return true
+	}
+
+	candidateUpdated := candidate.GetDateTime("updated")
+	selectedUpdated := selected.GetDateTime("updated")
+	if !candidateUpdated.Equal(selectedUpdated) {
+		return candidateUpdated.After(selectedUpdated)
+	}
+
+	candidateCreated := candidate.GetDateTime("created")
+	selectedCreated := selected.GetDateTime("created")
+	if !candidateCreated.Equal(selectedCreated) {
+		return candidateCreated.After(selectedCreated)
+	}
+
+	return candidate.Id > selected.Id
+}
+
+func normalizeTTLAndExpiry(record *core.Record, now types.DateTime) error {
+	rawTTL := record.GetRaw("ttl_seconds")
+	hasTTL := hasRawValue(rawTTL)
+	hasExpiresAt := hasRawValue(record.GetRaw("expires_at"))
+
+	if hasTTL {
+		ttl := record.GetInt("ttl_seconds")
+		if ttl <= 0 {
+			return validation.Errors{
+				"ttl_seconds": validation.NewError("validation_ttl_positive", "must be greater than 0"),
+			}
+		}
+
+		if !hasExpiresAt {
+			record.Set("expires_at", now.Add(time.Duration(ttl)*time.Second))
+		}
+	}
+
+	if hasRawValue(record.GetRaw("expires_at")) {
+		expiresAt := record.GetDateTime("expires_at")
+		if expiresAt.IsZero() {
+			return validation.Errors{
+				"expires_at": validation.NewError("validation_expires_at_invalid", "must be a valid datetime"),
+			}
+		}
+	}
+
+	return nil
+}
+
+func ensureNoOtherActiveSlug(app core.App, record *core.Record, now types.DateTime) error {
+	slug := record.GetString("slug")
+	if slug == "" || !record.GetBool("enabled") {
+		return nil
+	}
+
+	if isExpiredRecord(record, now) {
+		return nil
+	}
+
+	records, err := app.FindAllRecords(
+		"links",
+		dbx.NewExp(
+			"slug = {:slug} AND enabled = true AND (expires_at = '' OR expires_at > {:now}) AND id != {:id}",
+			dbx.Params{"slug": slug, "now": now.String(), "id": record.Id},
+		),
+	)
+	if err != nil {
 		return err
 	}
 
-	collection := core.NewCollection(core.CollectionTypeBase, "links")
-	collection.Fields.Add(
-		&core.TextField{
-			Name:     "slug",
-			Required: true,
-		},
-		&core.URLField{
-			Name:     "target_url",
-			Required: true,
-		},
-		&core.BoolField{
-			Name: "enabled",
-		},
-		&core.NumberField{
-			Name: "hits",
-		},
-		&core.DateField{
-			Name: "last_hit_at",
-		},
-	)
-	collection.AddIndex("idx_links_slug", true, "`slug`", "")
+	if len(records) == 0 {
+		return nil
+	}
 
-	return app.Save(collection)
+	return validation.Errors{
+		"slug": validation.NewError("validation_slug_active_exists", "an active link with this slug already exists"),
+	}
 }
 
 func ensureHttp80Default(args []string) []string {
@@ -186,6 +328,30 @@ func main() {
 				e.Record.Set("enabled", true)
 			}
 
+			now := types.NowDateTime().Add(0)
+			if err := normalizeTTLAndExpiry(e.Record, now); err != nil {
+				return err
+			}
+
+			if err := ensureNoOtherActiveSlug(e.App, e.Record, now); err != nil {
+				return err
+			}
+
+			return e.Next()
+		},
+	})
+
+	app.OnRecordUpdate("links").Bind(&hook.Handler[*core.RecordEvent]{
+		Func: func(e *core.RecordEvent) error {
+			now := types.NowDateTime().Add(0)
+			if err := normalizeTTLAndExpiry(e.Record, now); err != nil {
+				return err
+			}
+
+			if err := ensureNoOtherActiveSlug(e.App, e.Record, now); err != nil {
+				return err
+			}
+
 			return e.Next()
 		},
 	})
@@ -193,43 +359,81 @@ func main() {
 	app.OnServe().Bind(&hook.Handler[*core.ServeEvent]{
 		Func: func(e *core.ServeEvent) error {
 			e.Router.GET("/{slug...}", func(re *core.RequestEvent) error {
+				now := types.NowDateTime().Add(0)
 				slug, ok := normalizeSlug(re.Request.PathValue("slug"))
 				if !ok {
 					return re.NoContent(http.StatusNotFound)
 				}
 
-				record, err := app.FindFirstRecordByFilter(
+				exactRecords, err := app.FindAllRecords(
 					"links",
-					"slug = {:slug} && enabled = true",
-					dbx.Params{"slug": slug},
+					dbx.NewExp("slug = {:slug} AND enabled = true", dbx.Params{"slug": slug}),
 				)
+				if err != nil {
+					return re.NoContent(http.StatusNotFound)
+				}
+
+				var record *core.Record
+				exactExpired := false
+				for _, r := range exactRecords {
+					if isActiveRecord(r, now) {
+						if isRecordNewer(r, record) {
+							record = r
+						}
+						continue
+					}
+
+					if isExpiredRecord(r, now) {
+						exactExpired = true
+					}
+				}
 
 				var targetURL string
-				if err != nil {
+				if record == nil {
 					// No exact match — try parameterized slugs
 					records, findErr := app.FindAllRecords(
 						"links",
 						dbx.NewExp("slug LIKE '%{%}%' AND enabled = {:enabled}", dbx.Params{"enabled": true}),
 					)
 					if findErr != nil || len(records) == 0 {
+						if exactExpired {
+							return re.NoContent(http.StatusGone)
+						}
 						return re.NoContent(http.StatusNotFound)
 					}
 
-					var matched bool
+					var matchedExpired bool
+					var matchedActive *core.Record
 					for _, r := range records {
 						params, ok := matchParameterizedSlug(r.GetString("slug"), slug)
-						if ok {
-							record = r
+						if !ok {
+							continue
+						}
+
+						if isActiveRecord(r, now) {
 							raw := substituteParams(r.GetString("target_url"), params)
-							targetURL, ok = normalizeTargetURL(raw)
-							if !ok {
-								return re.NoContent(http.StatusNotFound)
+							resolvedTargetURL, targetOK := normalizeTargetURL(raw)
+							if !targetOK {
+								continue
 							}
-							matched = true
-							break
+
+							if isRecordNewer(r, matchedActive) {
+								matchedActive = r
+								targetURL = resolvedTargetURL
+							}
+							continue
+						}
+
+						if isExpiredRecord(r, now) {
+							matchedExpired = true
 						}
 					}
-					if !matched {
+
+					if matchedActive != nil {
+						record = matchedActive
+					} else if exactExpired || matchedExpired {
+						return re.NoContent(http.StatusGone)
+					} else {
 						return re.NoContent(http.StatusNotFound)
 					}
 				} else {

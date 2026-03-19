@@ -2,42 +2,74 @@ package main
 
 import (
 	"testing"
+	"time"
+
+	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/types"
 )
+
+func makeLinkRecord() *core.Record {
+	collection := core.NewCollection(core.CollectionTypeBase, "links")
+	collection.Fields.Add(
+		&core.TextField{Name: "slug", Required: true},
+		&core.URLField{Name: "target_url", Required: true},
+		&core.BoolField{Name: "enabled"},
+		&core.DateField{Name: "expires_at"},
+		&core.NumberField{Name: "ttl_seconds"},
+	)
+
+	record := core.NewRecord(collection)
+	record.Set("slug", "demo")
+	record.Set("target_url", "https://example.com")
+	record.Set("enabled", true)
+	return record
+}
+
+func mustParseDateTime(t *testing.T, value string) types.DateTime {
+	t.Helper()
+
+	d, err := types.ParseDateTime(value)
+	if err != nil {
+		t.Fatalf("ParseDateTime(%q) failed: %v", value, err)
+	}
+
+	return d
+}
 
 func TestMatchParameterizedSlug(t *testing.T) {
 	tests := []struct {
-		name      string
-		pattern   string
-		slug      string
-		wantMatch bool
+		name       string
+		pattern    string
+		slug       string
+		wantMatch  bool
 		wantParams map[string]string
 	}{
 		{
-			name:      "single param",
-			pattern:   "jira/{id}",
-			slug:      "jira/PROJ-123",
-			wantMatch: true,
+			name:       "single param",
+			pattern:    "jira/{id}",
+			slug:       "jira/PROJ-123",
+			wantMatch:  true,
 			wantParams: map[string]string{"id": "PROJ-123"},
 		},
 		{
-			name:      "multiple params",
-			pattern:   "{org}/{repo}",
-			slug:      "anthropic/claude",
-			wantMatch: true,
+			name:       "multiple params",
+			pattern:    "{org}/{repo}",
+			slug:       "anthropic/claude",
+			wantMatch:  true,
 			wantParams: map[string]string{"org": "anthropic", "repo": "claude"},
 		},
 		{
-			name:      "param in middle",
-			pattern:   "team/{name}/dashboard",
-			slug:      "team/backend/dashboard",
-			wantMatch: true,
+			name:       "param in middle",
+			pattern:    "team/{name}/dashboard",
+			slug:       "team/backend/dashboard",
+			wantMatch:  true,
 			wantParams: map[string]string{"name": "backend"},
 		},
 		{
-			name:      "no params exact match",
-			pattern:   "docs/api",
-			slug:      "docs/api",
-			wantMatch: true,
+			name:       "no params exact match",
+			pattern:    "docs/api",
+			slug:       "docs/api",
+			wantMatch:  true,
 			wantParams: map[string]string{},
 		},
 		{
@@ -59,10 +91,10 @@ func TestMatchParameterizedSlug(t *testing.T) {
 			wantMatch: false,
 		},
 		{
-			name:      "single segment param",
-			pattern:   "{id}",
-			slug:      "hello",
-			wantMatch: true,
+			name:       "single segment param",
+			pattern:    "{id}",
+			slug:       "hello",
+			wantMatch:  true,
 			wantParams: map[string]string{"id": "hello"},
 		},
 	}
@@ -139,10 +171,10 @@ func TestSubstituteParams(t *testing.T) {
 
 func TestNormalizeSlug_WithParams(t *testing.T) {
 	tests := []struct {
-		name    string
-		raw     string
-		want    string
-		wantOk  bool
+		name   string
+		raw    string
+		want   string
+		wantOk bool
 	}{
 		{
 			name:   "parameterized slug",
@@ -187,4 +219,87 @@ func TestNormalizeSlug_WithParams(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNormalizeTTLAndExpiry(t *testing.T) {
+	now := mustParseDateTime(t, "2026-03-19 00:00:00.000Z")
+
+	t.Run("ttl populates expires_at", func(t *testing.T) {
+		record := makeLinkRecord()
+		record.Set("ttl_seconds", 3600)
+
+		if err := normalizeTTLAndExpiry(record, now); err != nil {
+			t.Fatalf("normalizeTTLAndExpiry() error = %v", err)
+		}
+
+		expiresAt := record.GetDateTime("expires_at")
+		if expiresAt.IsZero() {
+			t.Fatal("expires_at should be set from ttl_seconds")
+		}
+
+		want := now.Add(1 * time.Hour)
+		if !expiresAt.Equal(want) {
+			t.Fatalf("expires_at = %q, want %q", expiresAt.String(), want.String())
+		}
+	})
+
+	t.Run("expires_at wins over ttl_seconds", func(t *testing.T) {
+		record := makeLinkRecord()
+		record.Set("ttl_seconds", 3600)
+		record.Set("expires_at", "2026-03-20 00:00:00.000Z")
+
+		if err := normalizeTTLAndExpiry(record, now); err != nil {
+			t.Fatalf("normalizeTTLAndExpiry() error = %v", err)
+		}
+
+		expiresAt := record.GetDateTime("expires_at")
+		want := mustParseDateTime(t, "2026-03-20 00:00:00.000Z")
+		if !expiresAt.Equal(want) {
+			t.Fatalf("expires_at = %q, want %q", expiresAt.String(), want.String())
+		}
+	})
+
+	t.Run("ttl_seconds must be positive", func(t *testing.T) {
+		record := makeLinkRecord()
+		record.Set("ttl_seconds", 0)
+
+		if err := normalizeTTLAndExpiry(record, now); err == nil {
+			t.Fatal("expected error for ttl_seconds <= 0")
+		}
+	})
+}
+
+func TestIsActiveRecord(t *testing.T) {
+	now := mustParseDateTime(t, "2026-03-19 00:00:00.000Z")
+
+	t.Run("enabled without expires_at is active", func(t *testing.T) {
+		record := makeLinkRecord()
+		if !isActiveRecord(record, now) {
+			t.Fatal("expected active record")
+		}
+	})
+
+	t.Run("disabled is inactive", func(t *testing.T) {
+		record := makeLinkRecord()
+		record.Set("enabled", false)
+		if isActiveRecord(record, now) {
+			t.Fatal("expected disabled record to be inactive")
+		}
+	})
+
+	t.Run("expired is inactive", func(t *testing.T) {
+		record := makeLinkRecord()
+		record.Set("expires_at", "2026-03-18 23:59:59.000Z")
+		if isActiveRecord(record, now) {
+			t.Fatal("expected expired record to be inactive")
+		}
+	})
+
+	t.Run("future expires_at is active", func(t *testing.T) {
+		record := makeLinkRecord()
+		record.Set("expires_at", "2026-03-19 01:00:00.000Z")
+		if !isActiveRecord(record, now) {
+			t.Fatal("expected non-expired record to be active")
+		}
+	})
 }
