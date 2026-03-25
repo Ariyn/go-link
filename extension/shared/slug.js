@@ -1,4 +1,4 @@
-const SLUG_PATTERN = /[^a-z0-9_/-]/g;
+const SLUG_PATTERN = /[^\p{L}\p{N}_/-]/gu;
 
 export function normalizeSlug(value) {
   if (!value) {

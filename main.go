@@ -21,7 +21,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var slugPattern = regexp.MustCompile("^[a-z0-9_/{}-]+$")
+var slugPattern = regexp.MustCompile(`^[\p{L}\p{N}_/{}-]+$`)
 var paramPattern = regexp.MustCompile(`\{([^}]+)\}`)
 
 func normalizeSlug(raw string) (string, bool) {

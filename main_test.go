@@ -97,6 +97,13 @@ func TestMatchParameterizedSlug(t *testing.T) {
 			wantMatch:  true,
 			wantParams: map[string]string{"id": "hello"},
 		},
+		{
+			name:       "korean value in param",
+			pattern:    "wiki/{name}",
+			slug:       "wiki/한글",
+			wantMatch:  true,
+			wantParams: map[string]string{"name": "한글"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -204,6 +211,18 @@ func TestNormalizeSlug_WithParams(t *testing.T) {
 			name:   "leading trailing slashes trimmed",
 			raw:    "/jira/{id}/",
 			want:   "jira/{id}",
+			wantOk: true,
+		},
+		{
+			name:   "korean slug",
+			raw:    "wiki/한글",
+			want:   "wiki/한글",
+			wantOk: true,
+		},
+		{
+			name:   "korean parameterized slug",
+			raw:    "위키/{id}",
+			want:   "위키/{id}",
 			wantOk: true,
 		},
 	}
